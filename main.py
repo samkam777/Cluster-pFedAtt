@@ -40,7 +40,7 @@ def main():
 		help="batch size for training")
 	parser.add_argument("--server_epochs", 
 		type=int,
-		default=60,  
+		default=120,  
 		help="server training epoches")
 	parser.add_argument("--cluster_epochs", 
 		type=int,
@@ -87,8 +87,8 @@ def main():
 		default=0.01,
 		help="Persionalized learning rate to caculate theta aproximately using K steps")
 	parser.add_argument("--lamda",
-		type=int,
-		default=1,
+		type=float,
+		default=0.0001,
 		help="Regularization term")
 	parser.add_argument("--K",
 		type=int,
@@ -166,7 +166,7 @@ def main():
 		if args._running_time != "2021-00-00-00-00-00":
 			running_time = args._running_time			# get time from *.sh file 
 		else:
-			running_time = time.strftime("%Y-%m-%d %H-%M-%S", time.localtime())		# get the present time
+			running_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())		# get the present time
 		print("running time: {}".format(running_time))
 
 		# load client train data and test data
@@ -200,6 +200,7 @@ def main():
 			server = pFedMe(device, args, train_loader, test_loader, model, train_data_samples, cluster_data_sample, total_train_data_sample, running_time, hyper_param)
 
 		if(args.algorithm == "FedAvg"):
+			# device, args, train_loader, test_loader, model, train_data_samples, cluster_total_train_data_sample, running_time, cluster_id, hyper_param
 			server = FedAvg(device, args, train_loader, test_loader, model, train_data_samples, cluster_data_sample, total_train_data_sample, running_time, hyper_param)
 
 		server.train()

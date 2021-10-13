@@ -21,13 +21,12 @@ class UserpFedMe(User):
         super().__init__(device, args, model, train_data, test_data, train_data_samples, numeric_id, hyper_param, running_time)
         self.total_users = args.seg_data
 
-        #self.loss = nn.BCELoss()
-        self.loss = pFedMe_BCELoss()
+        self.loss = nn.BCELoss(reduction="mean").to(device)
         self.K = args.K
         self.personal_learning_rate = args.personal_learning_rate
         self.optimizer = pFedMeAdamOptimizer(self.model.parameters(), lr=self.personal_learning_rate, lamda=self.lamda)
 
-        self.reg_loss = Regularization(self.model, self.p_local_model, weight_decay=1, p=2).to(device)
+        # self.reg_loss = Regularization(self.model, self.p_local_model, weight_decay=1, p=2).to(device)
         if self.if_DP:
             self.privacy_engine = PrivacyEngine(
                 self.model,
@@ -82,9 +81,14 @@ class UserpFedMe(User):
             # K is number of personalized steps
             for i in range(self.K):  
                 output = self.model(user, item)
-                reg_loss = self.reg_loss(self.model, self.p_local_model)
-                loss = self.loss(output, label, reg_loss)
-                loss.backward()
+
+                reg_loss = torch.tensor(0.).to(self.device)
+                for p, local_p in zip(self.model.parameters(), self.p_local_model.parameters()):
+                    reg_loss += (torch.norm(p-local_p, p=2)) ** 2
+
+                loss = self.loss(output, label)
+                pfedloss = loss + self.lamda*reg_loss
+                pfedloss.backward()
 
                 if self.if_DP:
                 # 只有最后一个epoch加噪声
@@ -112,10 +116,10 @@ class UserpFedMe(User):
                     self.optimizer.zero_grad()
 
                 # loss
-                losses.append(loss.item())
+                losses.append(pfedloss.item())
 
-        for new_param, localweight in zip(self.model.parameters(), self.p_local_model.parameters()):
-            localweight.data = localweight.data - self.lamda* self.learning_rate * (localweight.data - new_param.data)  # 论文算法1中第8行 原文的lamda*lr=0.075 这里0.75
+            for new_param, localweight in zip(self.model.parameters(), self.p_local_model.parameters()):
+                localweight.data = localweight.data - self.lamda* self.learning_rate * (localweight.data - new_param.data)  # 论文算法1中第8行 原文的lamda*lr=0.075 这里0.75
 
         #update local model as local_weight_upated
         self.update_parameters(self.p_local_model.parameters())
@@ -124,7 +128,7 @@ class UserpFedMe(User):
         train_loss = sum(losses) / len(losses)
 
         # evaluate
-        self.user_persionalized_evaluate(server_iter, cluster_iter, cluster_id)
+        self.user_persionalized_evaluate(server_iter, cluster_iter, cluster_id, train_loss)
         
         # calculate privacy budget
         if self.if_DP:

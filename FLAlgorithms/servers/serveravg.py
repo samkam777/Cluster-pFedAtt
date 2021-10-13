@@ -1,52 +1,57 @@
 import torch
 import os
 
-from FLAlgorithms.users.useravg import UserAVG
+from FLAlgorithms.cluster.clusteravg import ClusterFedAvg
 from FLAlgorithms.servers.serverbase import Server
 import numpy as np
 
-class FedAvg(Server):
-    def __init__(self, device, args, train_loader, test_loader, model, times, train_data_samples, total_train_data_sample, running_time):
-        super().__init__(device, args, train_loader, test_loader, model, times, train_data_samples, total_train_data_sample, running_time)
+from logging_results import eps_logging
 
-        for i in range(args.seg_data):
+class FedAvg(Server):
+    def __init__(self, device, args, train_loader, test_loader, model, train_data_samples, cluster_total_train_data_sample, server_total_train_data_sample, running_time, hyper_param):
+        super().__init__(device, args, train_loader, test_loader, model, train_data_samples, cluster_total_train_data_sample, server_total_train_data_sample, running_time, hyper_param)
+
+        for i in range(self.num_clusters):
             train_data = train_loader[i]
             test_data = test_loader[i]
-            user = UserAVG(device, args, model, train_data, test_data, train_data_samples[i], i)
-            self.users.append(user)
-        self.total_train_samples = total_train_data_sample
-
-    def send_grads(self):
-        assert (self.users is not None and len(self.users) > 0)
-        grads = []
-        for param in self.model.parameters():
-            if param.grad is None:
-                grads.append(torch.zeros_like(param.data))
-            else:
-                grads.append(param.grad)
-        for user in self.users:
-            user.set_grads(grads)
+            cluster = ClusterFedAvg(device, args, train_data, test_data, model, train_data_samples[i], cluster_total_train_data_sample[i], running_time, i, hyper_param)
+            self.clusters.append(cluster)
 
     
     def train(self):
 
-        for glob_iter in range(self.num_glob_iters):
-            print("-------------Round number: ",glob_iter, " -------------")
-            # send all parameter for users 
-            # self.send_parameters()
+        for server_iter in range(self.server_iters):
+            print("")
+            print("---------------------------server iter: ",server_iter, " ---------------------------")
 
-            # Evaluate model each interation
-            # self.evaluate()
+            epsilons_list = []
+            losses = []
 
-            self.selected_users = self.select_users(glob_iter,self.num_users)
-            for user in self.selected_users:
-                user.train(glob_iter) #* user.train_samples
+            # do update for all clusters not only selected clusters
+            for cluster in self.clusters:
+                if self.if_DP:
+                    train_loss, epsilons = cluster.train(server_iter)
+                    epsilons_list.append(epsilons)
+                    losses.append(train_loss)
+                else:
+                    train_loss = cluster.train(server_iter)
+                    losses.append(train_loss)
 
-            self.evaluate(glob_iter)
+            # choose several clusters to send back upated model to server
+            self.selected_cluster = self.select_cluster(server_iter, self.num_clusters)
+
+            # Evaluate average model on server for each interation
+            print("")
+            print("Evaluate server average model")
+            self.evaluate(server_iter, losses)
 
             self.aggregate_parameters()
 
             self.send_parameters()
+
+            if self.if_DP:
+                eps = sum(epsilons_list) / len(epsilons_list)
+                eps_logging(server_iter, eps, self.running_time)
 
 
 

@@ -180,9 +180,17 @@ class User:
 
 ###################### user evaluate ######################
     # pFedMe
-    def user_persionalized_evaluate(self, server_iter, cluster_iter, cluster_id):
+    def user_persionalized_evaluate(self, server_iter, cluster_iter, cluster_id, train_loss):
         HR, NDCG = self.test_persionalized_model()
-        train_loss = self.train_error_and_loss_persionalized_model()
+        # train_loss = self.train_error_and_loss_persionalized_model()
+
+        print("cluster: {}   user: {}   loss:{:.4f}   HR: {:.4f}   NDCG: {:.4f}\t".format(cluster_id, self.user_id, train_loss, HR, NDCG))
+
+        user_logging(server_iter, cluster_iter, cluster_id, self.user_id, train_loss, HR, NDCG, self.running_time, self.hyper_param)
+
+    def user_evaluate(self, server_iter, cluster_iter, cluster_id, train_loss):
+        HR, NDCG = self.test()
+        # train_loss = self.train_error_and_loss()
 
         print("cluster: {}   user: {}   loss:{:.4f}   HR: {:.4f}   NDCG: {:.4f}\t".format(cluster_id, self.user_id, train_loss, HR, NDCG))
 

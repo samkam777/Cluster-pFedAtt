@@ -3,6 +3,7 @@ import os
 import numpy as np
 import copy
 from logging_results import cluster_logging
+import torch.nn.functional as F
 
 class Cluster:
     def __init__(self, device, args, train_loader, test_loader, model, train_data_samples, cluster_total_train_data_sample, running_time, cluster_id, hyper_param):
@@ -51,6 +52,12 @@ class Cluster:
                 grads.append(param.grad)
         for user in self.users:
             user.set_grads(grads)
+
+    def get_att_weight(self, user):
+        att_weight = torch.tensor(0.).to(self.device)
+        for server_param, user_param in zip(self.model.parameters(), user.get_parameters()):
+            att_weight += torch.norm(server_param-user_param, p=2)
+        return att_weight
 ###########################################################
 
 ################# weight parameters update #################
@@ -92,6 +99,41 @@ class Cluster:
         # aaggregate avergage model with previous model using parameter beta 
         for pre_param, param in zip(previous_param, self.model.parameters()):
             param.data = (1 - self.beta)*pre_param.data + self.beta*param.data      # 论文算法1中第10行
+
+
+
+
+
+
+    # attention pFed
+    def attention_persionalized_aggregate_parameters(self):
+        assert (self.users is not None and len(self.users) > 0)
+
+        # store previous parameters
+        previous_param = copy.deepcopy(list(self.model.parameters()))
+        for param in self.model.parameters():
+            param.data = torch.zeros_like(param.data)
+
+        att_w = []
+        for user in self.selected_users:
+            att_weight = self.get_att_weight(user)
+            att_w.append(att_weight)
+        att_w_ = torch.Tensor(att_w)
+        print("att_w: {}\t".format(att_w_))
+        min_att_w_ = torch.min(att_w_)
+        max_att_w_ = torch.max(att_w_)
+        # norm_att_w_ = 1 - ((att_w_ - min_att_w_) / (max_att_w_ - min_att_w_))
+        norm_att_w_ = (att_w_ - min_att_w_) / (max_att_w_ - min_att_w_)
+        norm_att_w_ = F.softmax(norm_att_w_, dim=0)   # 行和
+        print("att_w after softmax: {}\t".format(norm_att_w_))
+
+        for i, user in enumerate(self.selected_users):
+            self.add_parameters(user, norm_att_w_[i])  
+
+        # aaggregate avergage model with previous model using parameter beta 
+        for pre_param, param in zip(previous_param, self.model.parameters()):
+            param.data = (1 - self.beta)*pre_param.data + self.beta*param.data   
+
 ############################################################
 
 ############## get and set cluster parameters ##############
@@ -174,47 +216,40 @@ class Cluster:
         return ids, losses
 
     # FedAvg
-    def evaluate(self, server_iter, cluster_iter, cluster_id):
+    def evaluate(self, server_iter, cluster_iter, cluster_id, losses):
         stats = self.test()
-        stats_train = self.train_error_and_loss()
+        # stats_train = self.train_error_and_loss()
 
         HR = sum(stats[1]) / len(stats[1])
         NDCG = sum(stats[2]) / len(stats[2])
-        train_loss = sum(stats_train[1]) / len(stats_train[1])
-        self.rs_train_loss.append(train_loss)
-        self.rs_HR.append(HR)
-        self.rs_NDCG.append(NDCG) 
+        train_loss = sum(losses) / len(losses)
 
-        # print("Average cluster HR: ", HR)
-        # print("Average cluster NDCG: ", NDCG)
-        # print("Average cluster Trainning Loss: ",train_loss)
+        # self.rs_train_loss.append(train_loss)
+        # self.rs_HR.append(HR)
+        # self.rs_NDCG.append(NDCG) 
+
         print("cluster: {}   loss:{:.4f}   HR: {:.4f}   NDCG: {:.4f}\t".format(self.cluster_id, train_loss, HR, NDCG))
 
         cluster_logging(server_iter, cluster_iter, cluster_id, train_loss, HR, NDCG, self.running_time, self.hyper_param)
 
-        # return HR, NDCG, train_loss
 
     # pFedMe
-    def evaluate_personalized_model(self, server_iter, cluster_iter, cluster_id):
+    def evaluate_personalized_model(self, server_iter, cluster_iter, cluster_id, losses):
         stats = self.test_persionalized_model()  
-        stats_train = self.train_error_and_loss_persionalized_model()
+        # stats_train = self.train_error_and_loss_persionalized_model()
 
         HR = sum(stats[1]) / len(stats[1])
         NDCG = sum(stats[2]) / len(stats[2])
-        train_loss = sum(stats_train[1]) / len(stats_train[1])
+        train_loss = sum(losses) / len(losses)
 
-        self.rs_train_loss_per.append(train_loss)
-        self.rs_HR_per.append(HR)
-        self.rs_NDCG_per.append(NDCG) 
+        # self.rs_train_loss_per.append(train_loss)
+        # self.rs_HR_per.append(HR)
+        # self.rs_NDCG_per.append(NDCG) 
 
-        # print("Average cluster Personal HR: ", HR)
-        # print("Average cluster Personal NDCG: ", NDCG)
-        # print("Average cluster Personal Trainning Loss: ",train_loss)
         print("Average cluster: {}   loss:{:.4f}   HR: {:.4f}   NDCG: {:.4f}\t".format(self.cluster_id, train_loss, HR, NDCG))
 
         cluster_logging(server_iter, cluster_iter, cluster_id, train_loss, HR, NDCG, self.running_time, self.hyper_param)
 
-        # return HR, NDCG, train_loss
 #############################################################
 
 
@@ -244,15 +279,27 @@ class Cluster:
 
         return ids, total_HR, total_NDCG
 
-    def server_evaluate(self):
+    # pFedMe
+    def server_evaluate_persionalized_model(self):
         stats = self.server_test_persionalized_model()
-        stats_train = self.train_error_and_loss_persionalized_model()       # clients use the personalized model
+        # stats_train = self.train_error_and_loss_persionalized_model()       # clients use the personalized model
 
         HR = sum(stats[1]) / len(stats[1])
         NDCG = sum(stats[2]) / len(stats[2])
-        train_loss = sum(stats_train[1]) / len(stats_train[1])
+        # train_loss = sum(stats_train[1]) / len(stats_train[1])
 
-        return HR, NDCG, train_loss
+        return HR, NDCG
+
+    # FedAvg
+    def server_evaluate(self):
+        stats = self.server_test()
+        # stats_train = self.train_error_and_loss_persionalized_model()       # clients use the personalized model
+
+        HR = sum(stats[1]) / len(stats[1])
+        NDCG = sum(stats[2]) / len(stats[2])
+        # train_loss = sum(stats_train[1]) / len(stats_train[1])
+
+        return HR, NDCG
 #############################################################
         
 
